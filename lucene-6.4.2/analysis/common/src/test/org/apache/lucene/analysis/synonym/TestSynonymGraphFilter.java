@@ -56,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class TestSynonymGraphFilter extends BaseTokenStreamTestCase {
@@ -1925,32 +1926,36 @@ public class TestSynonymGraphFilter extends BaseTokenStreamTestCase {
     a.close();
   }
 
-  /**
-   * Helper method to validate all strings that can be generated from a token stream.
-   * Uses {@link TokenStreamToAutomaton} to create an automaton. Asserts the finite strings of the automaton are all
-   * and only the given valid strings.
-   * @param analyzer analyzer containing the SynonymFilter under test.
-   * @param text text to be analyzed.
-   * @param expectedStrings all expected finite strings.
-   */
-  public void assertAllStrings(Analyzer analyzer, String text, String[] expectedStrings) throws IOException {
-    TokenStream tokenStream = analyzer.tokenStream("dummy", text);
-    try {
-      Automaton automaton = new TokenStreamToAutomaton().toAutomaton(tokenStream);
-      Set<IntsRef> finiteStrings = AutomatonTestUtil.getFiniteStringsRecursive(automaton, -1);
+  public void testUpperCase() throws IOException {
+    assertMapping("word", "synonym");
+    assertMapping("word".toUpperCase(Locale.ROOT), "synonym");
+  }
 
-      assertEquals("Invalid resulting strings count. Expected " + expectedStrings.length + " was " + finiteStrings.size(),
-          expectedStrings.length, finiteStrings.size());
+  private void assertMapping(String inputString, String outputString) throws IOException {
+    SynonymMap.Builder builder = new SynonymMap.Builder(false);
+    // the rules must be lowercased up front, but the incoming tokens will be case insensitive:
+    CharsRef input = SynonymMap.Builder.join(inputString.toLowerCase(Locale.ROOT).split(" "), new CharsRefBuilder());
+    CharsRef output = SynonymMap.Builder.join(outputString.split(" "), new CharsRefBuilder());
+    builder.add(input, output, true);
+    Analyzer analyzer = new CustomAnalyzer(builder.build());
+    TokenStream tokenStream = analyzer.tokenStream("field", inputString);
+    assertTokenStreamContents(tokenStream, new String[]{
+            outputString, inputString
+    });
+  }
 
-      Set<String> expectedStringsSet = new HashSet<>(Arrays.asList(expectedStrings));
+  static class CustomAnalyzer extends Analyzer {
+    private SynonymMap synonymMap;
 
-      BytesRefBuilder scratchBytesRefBuilder = new BytesRefBuilder();
-      for (IntsRef ir: finiteStrings) {
-        String s = Util.toBytesRef(ir, scratchBytesRefBuilder).utf8ToString().replace((char) TokenStreamToAutomaton.POS_SEP, ' ');
-        assertTrue("Unexpected string found: " + s, expectedStringsSet.contains(s));
-      }
-    } finally {
-      tokenStream.close();
+    CustomAnalyzer(SynonymMap synonymMap) {
+      this.synonymMap = synonymMap;
+    }
+
+    @Override
+    protected TokenStreamComponents createComponents(String s) {
+      Tokenizer tokenizer = new MockTokenizer(MockTokenizer.WHITESPACE, false);
+      TokenStream tokenStream = new SynonymGraphFilter(tokenizer, synonymMap, true); // Ignore case True
+      return new TokenStreamComponents(tokenizer, tokenStream);
     }
   }
 }
